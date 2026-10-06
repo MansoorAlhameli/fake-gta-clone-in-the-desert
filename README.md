@@ -52,6 +52,79 @@ existing vehicle/NPC pools and mission state machine:
 10. **Clash at the Oasis** - clear the foot patrols and both armed trucks.
 
 Mission progress and cash are saved in Story Mode. Some specified vehicles and interactive
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*need to add later
+Grand Theft Auto: Liberty City Stories (LCS) running seamlessly on the PSP in 2005 is widely considered one of the greatest technical achievements in handheld gaming history.
+To shrink a massive, open-world 3D console game down to a portable device with a 333MHz CPU and a strict 32MB of RAM, Rockstar Leeds and Rockstar North had to ditch the standard RenderWare engine used for GTA III, Vice City, and San Andreas. Instead, they built a brand-new custom engine explicitly designed to exploit the PSP's unique hardware strengths.
+Here is exactly how they pulled it off:
+1. Aggressive Data Streaming & UMD Prediction
+The game had to fit a fully living 3D world into 32MB of RAM while reading data from a physical Universal Media Disc (UMD), which had incredibly slow read speeds and killed battery life.
+• Movement Tracking: The custom engine continuously calculated the player’s speed and direction. If the player drove north, the engine aggressively predicted what assets were coming up, read a massive chunk of data from the UMD all at once into a RAM buffer, and then shut down the UMD drive completely to save battery. The laser only turned back on when the player approached the edge of the loaded buffer.
+• Environmental Hiding Spaces: The game’s story setting (1998) was cleverly manipulated to help memory loading. For example, the bridge from GTA III was replaced with a ferry system. When the player was on the ferry, the game placed them in a low-processing environment, buying the hardware precious extra seconds to clear the old island out of the RAM and stream in the new one.
+2. Radical Memory and Asset Reductions
+Because the 32MB pool of RAM was so tight, the world's density had to be tightly rationed.
+• Density Throttling: The total number of pedestrians and vehicles allowed on screen at the same time was drastically lowered compared to the PS2 games. The engine aggressively prioritized rendering only what was within the player's immediate field of view.
+• Ultra-Tight Compression: Working alongside Rockstar North, the developers adapted compression algorithms from San Andreas and pushed them further. Every single character model, weapon texture, and sound file was trimmed down to its bare essential data to maximize space.
+3. Aggressive 3-Stage LOD (Level of Detail)
+To keep the framerate stable, the engine used an aggressive, highly noticeable three-stage model-swapping system based on player distance:
+• 0–50 meters: Objects and cars rendered at full geometric and texture detail.
+• 50–100 meters: The engine swapped assets out for low-polygon, stripped-down versions.
+• 200+ meters: The game stopped rendering 3D models entirely and replaced faraway cars and structures with flat 2D sprites, saving massive amounts of GPU rendering power.
+4. Cheating the GPU Hardware
+The PSP had built-in hardware functions for handling curved surfaces and lighting. Rockstar took full advantage of these micro-chips to pull off visual tricks that standard ports couldn't:
+• The Reflection Trick: By using the PSP GPU’s specific hardware handling of curved surfaces, they created real-time car reflections that were technically sharper and more dynamic than what GTA III pulled off on the much more powerful PlayStation 2.
+• Fog Blinding: To mask the PSP's limited draw distance and prevent buildings from awkwardly popping into existence out of nowhere, they densified the game's atmosphere with a soft fog-blinding technique. Buildings and bridges gradually emerged from the neblina, making the world feel naturally atmospheric rather than hardware-restricted.
+Building on the broad strokes of how Grand Theft Auto: Liberty City Stories (LCS) conquered the PSP, the actual engineering blueprint required optimizing every single piece of data passing through the system. Because Rockstar Leeds discarded RenderWare to build a proprietary engine, they had total low-level control over the PSP's silicon.
+The deep engineering optimizations span audio squeezing, single-stick input ergonomics, and brutal RAM management:
+1. Squeezing Audio into the MIPS Pipeline
+Audio is often the silent performance killer in open-world games. For GTA LCS, keeping multiple full-length radio stations, voice lines, and 3D engine noises running simultaneously on 32MB of RAM was impossible without hardware-accelerated decompression.
+• Sony ATRAC3plus Compression: Rockstar avoided standard uncompressed formats or heavy MP3 decoding, which would have melted the CPU. Instead, they compressed all radio and dialogue into Sony’s proprietary ATRAC3 / ATRAC3plus format. The PSP featured a dedicated hardware audio chip capable of unpacking ATRAC3 data streams directly into sound buffers with zero CPU overhead.
+• The Mono Trick: To halve the memory footprint of dialogue, standard civilian voices and pedestrian screams were mixed down to mono and heavily downsampled. Only the music radio stations retained high-bitrate stereo mixing, allowing the disc to fit hours of media while keeping a minuscule streaming footprint.
+2. Solving the Single Analog Stick (Ergonomics as Optimization)
+The PS2 GTA games relied on two analog sticks—left for moving Toni Cipriani, right for steering the camera. The PSP only had one physical analog nub. Camera manipulation had to be re-engineered dynamically to avoid crippling computational physics.
+• Predictive Camera Vectors: Moving the camera requires the engine to calculate a new "visibility frustum" and dynamically load objects coming into view. To stop the game from stuttering during rapid camera panning, Rockstar implemented a predictive target-tracking camera. The camera strictly follows Toni’s velocity vector or locks tightly behind a vehicle.
+• The "Look Around" Lock: Free-cam movement was hidden behind a modifier button (holding the L-Shoulder button enabled camera steering with the analog stick). When you held L, the engine actively lowered Toni’s movement physics to a dead stop, prioritizing hardware resources strictly for calculating camera sweeps and rendering new angles without lagging.
+3. Brutal Memory Budgeting: "The 3-Pool Divide"
+Every bit of the PSP's 32MB of RAM was manually partitioned into hard boundaries to ensure the game could never hit an "Out of Memory" crash loop.
+[ Total PSP Memory Available: 32 MB ]
+─────────────────────────────────────────────────────────────────
+│   Core Game Engine & Executable Code Code   (approx. 8–10 MB) │
+─────────────────────────────────────────────────────────────────
+│   Static Allocation Pool (Physics, Fixed Vehicles)  ( ~6 MB)  │
+─────────────────────────────────────────────────────────────────
+│   Dynamic Streaming Buffer (Textures, Map Chunks)  (~16 MB)   │
+─────────────────────────────────────────────────────────────────
+• Zero Garbage Collection: Written entirely in low-level C/C++, there was no automatic memory cleanup. Objects were overwritten directly in memory. If a car blew up and the player drove 50 meters away, its structural container was immediately zeroed out and overwritten by the data of an oncoming pedestrian.
+• The "Same Car" Illusion: If you’ve ever noticed that driving a specific sports car causes the game world to suddenly spawn dozens of that exact same sports car, you are witnessing a deliberate RAM optimization trick. Because that car's 3D mesh and texture map are already locked inside the RAM allocation pool, the engine spawns duplicates of it to populate the streets without needing to fetch new vehicle assets from the slow UMD drive.
+4. Overclocking the PSP (The 222MHz vs 333MHz Secret)
+When GTA LCS launched in October 2005, Sony strictly forbade developers from using the PSP's maximum CPU speed. To preserve battery life, Sony underclocked the CPU to 222MHz out of the box.
+• Pushing the Silicon: Rockstar Leeds optimized the engine so tightly that it targeted 30 frames per second at 222MHz. However, frame drops in heavy intersections were still common.
+• The Official Patch: Recognizing how crucial GTA was for the handheld, Sony later unlocked the firmware, allowing developers to tap into the full 333MHz clock speed. GTA LCS was built to dynamically take advantage of this extra headroom, utilizing the extra 111MHz to stabilize physics calculations during massive multi-car police chases and heavy explosions without changing a single line of core asset code.
 locations are represented by the game's existing vehicle types and world coordinates; passenger
 pickups, weapon unlocks, and the crusher are mission-state events rather than separate interior
 systems. Radio playback is not included yet: this project has no audio-streaming manager or bundled
