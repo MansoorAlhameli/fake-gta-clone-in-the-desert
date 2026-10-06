@@ -1,6 +1,6 @@
 # Liwa Sandbox - build notes
 
-Files: `main.c` (whole game), `Makefile`.
+Files: `main.c` (gameplay and rendering), `VehicleSystem.h/.cpp` (input and vehicle math helpers), `Makefile`.
 
 ## Build on macOS
 1. Install the toolchain (pspdev): prebuilt release from github.com/pspdev/pspdev, or build from source.
@@ -16,19 +16,20 @@ Files: `main.c` (whole game), `Makefile`.
 - Real PSP (custom firmware): copy the folder to `ms0:/PSP/GAME/LiwaSandbox/`
   (the folder name matters: story-mode save data goes to `ms0:/PSP/GAME/LiwaSandbox/save.dat`).
 - Main menu: use Up/Down to select Story Mode, Free Roam, Gallery, Options, or Quit; press X to confirm.
-- Options: choose a starting area (Liwa Dunes, City, or Airport), rebind controls, select a player outfit, or adjust camera sensitivity. Use Up/Down to select, Left/Right or X to change values, and O to return.
+- Options: choose a starting area (City is the default; Liwa Dunes and Airport are also available), rebind controls, select a player outfit, or adjust camera sensitivity. Use Up/Down to select, Left/Right or X to change values, and O to return.
 
 ## If the build fails
 - Linker error mentioning `msx`: the HUD font symbol is not exported by your libpspdebug. Tell me and I will embed a font.
 - Any other error: send me the first 10 lines of the compiler output.
 
 ## Controls (defaults, remappable in the menu)
-- Nub: move / steer.  X sprint / accelerate.  O fire / brake.  [] jump / handbrake.  /\ enter-exit / shop.
+- Nub: move / steer.  X sprint / accelerate.  [] brake / reverse.  O fire / handbrake.  /\ enter-exit / shop.
 - L hold: free look (tap: recenter).  R hold: lock-on (sniper: first-person aim).  D-pad L/R: weapon, lock target, plane rudder.  D-pad Down: honk while driving.
 - SELECT: camera distance.  START: photo mode (X shoot, START exit).
 - In a car: L + nub left/right looks out the windows, L + O drive-by.
 - Planes: nub = roll/pitch, X/O throttle up/down, D-pad L/R rudder.
 - On foot, Triangle enters a nearby vehicle; while driving, stop and press Triangle to exit. Pedestrians use the placeholder character and yield to approaching traffic. The city has visible gun shops, a hospital, and a police department; being wasted or busted shows a full-screen message before respawning at the nearest matching service.
+- The city starts with a small pedestrian crowd, including walkers that circle clear blocks, plus randomized traffic on a marked road loop. Traffic obeys timed signals and stop signs, cruises slowly on local streets, and moves slightly faster on the arterial. Rendering is capped at 30 FPS while input and simulation continue at each display refresh.
 - The open world starts at 08:00 and advances at one game minute per real second. Weather periodically shifts between clear, cloudy, sandstorm, and rain; it changes sky/fog presentation, and rain reduces vehicle grip. Up to 24 ambient/mission pedestrians share a fixed pool: ambient pedestrians choose destinations, flee gunfire or nearby fast vehicles, and are despawned when they are more than 340 m away. New city pedestrians appear outside the near-camera range. The wanted system supports up to six stars.
 
 ## Story missions

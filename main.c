@@ -171,6 +171,7 @@ extern int sceIoRemove(const char *path);
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include "VehicleSystem.h"
 
 PSP_MODULE_INFO("LiwaSandbox", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -291,6 +292,7 @@ typedef struct {
     float    vx, vz, vy;    /* world velocity (vy: ballistic / sink)          */
     float    speed;         /* signed forward speed */
     float    spin;          /* collision yaw impulse (pit manoeuvres) */
+    float    traffic_stop_timer, traffic_stop_cooldown;
     float    throttle;      /* planes */
     float    health;
     float    flip_timer;
@@ -309,6 +311,8 @@ typedef struct {
     int      state;         /* NpcState */
     uint32_t color;
     int      type;          /* 0 civilian, 1 guard (stationary), 2 mission target */
+    int      behavior;
+    float    orbit_x, orbit_z, orbit_radius, orbit_angle;
     int      pinned;        /* mission entity: never auto-despawned */
 } NPC;
 
@@ -420,6 +424,7 @@ static Vector3D  death_pos;
 
 static Vector3D cam_eye, cam_ctr;
 static float    cam_yaw = 0.0f;
+static int      camera_initialized = 0;
 /* LCS-style camera state */
 static float    look_yaw = 0.0f, look_pitch = 0.0f, l_hold_t = 0.0f, cam_fov = 60.0f, aim_pitch = 0.0f;
 static float    camera_sensitivity = 1.0f;
@@ -436,7 +441,7 @@ static int   store_poi = 0, store_sel = 0;
 static float heist_prog = 0.0f;
 
 static int   ctl_row = 0, ctl_listen = 0;
-static int   options_sel = 0, selected_map = 0, selected_outfit = 0;
+static int   options_sel = 0, selected_map = 1, selected_outfit = 0;
 static GalleryEntry gallery[MAX_GALLERY];
 static int   gallery_count = 0, gallery_sel = 0;
 
@@ -684,15 +689,12 @@ static int spawn_vehicle(int type, float x, float z, float yaw, int ai) {
 static void eject_player(float dmg) {
     if (player.veh < 0) return;
     Vehicle *v = &vehicles[player.veh];
-    float rx = -cosf(v->yaw), rz = sinf(v->yaw);
-    float side = 3.0f;
-    float lx = v->pos.x + rx * side, lz = v->pos.z + rz * side;
-    float rxp = v->pos.x - rx * side, rzp = v->pos.z - rz * side;
-    if (point_blocked(lx, lz) && !point_blocked(rxp, rzp)) {
-        player.pos.x = rxp; player.pos.z = rzp;
-    } else {
-        player.pos.x = lx; player.pos.z = lz;
-    }
+    VehicleSystemVector3 left, right;
+    VehicleSystemVector3 vehicle_pos = { v->pos.x, v->pos.y, v->pos.z };
+    VehicleSystem_ExitCandidates(vehicle_pos, v->yaw, 3.0f, &left, &right);
+    VehicleSystemVector3 exit_pos = left;
+    if (point_blocked(left.x, left.z) && !point_blocked(right.x, right.z)) exit_pos = right;
+    player.pos.x = exit_pos.x; player.pos.z = exit_pos.z;
     player.pos.y = terrain_height(player.pos.x, player.pos.z);
     player.vy = 0; player.on_ground = 1; player.yaw = v->yaw;
     player.health -= (int)dmg;
@@ -978,11 +980,13 @@ static int lock_nearest(void) {
 }
 static int nearest_vehicle_in_reach(float max_distance) {
     int best = -1;
-    float best_distance = max_distance;
+    float best_distance_squared = max_distance * max_distance;
+    VehicleSystemVector3 player_pos = { player.pos.x, player.pos.y, player.pos.z };
     for (int i = 0; i < MAX_VEHICLES; i++) {
         if (!vehicles[i].active || vehicles[i].occupied || vehicles[i].flip_timer > 0.0f) continue;
-        float d = dist2d(vehicles[i].pos.x, vehicles[i].pos.z, player.pos.x, player.pos.z);
-        if (d < best_distance) { best_distance = d; best = i; }
+        VehicleSystemVector3 vehicle_pos = { vehicles[i].pos.x, vehicles[i].pos.y, vehicles[i].pos.z };
+        float d2 = VehicleSystem_DistanceSquared3D(vehicle_pos, player_pos);
+        if (d2 < best_distance_squared) { best_distance_squared = d2; best = i; }
     }
     return best;
 }
@@ -1076,6 +1080,77 @@ static Route routes[MAX_ROUTES];
 static int   routes_used = 0;
 static int    traffic_routes = 0;
 
+typedef struct { float x, z, phase_offset; } CitySignal;
+typedef struct { float x, z; } CityStopSign;
+static const CitySignal CITY_SIGNALS[] = {
+    {-992.0f, 512.0f, 0.0f}, {-992.0f, 1088.0f, 9.0f}
+};
+static const CityStopSign CITY_STOP_SIGNS[] = {
+    {-1280.0f, 800.0f}, {-704.0f, 800.0f}
+};
+#define CITY_SIGNAL_COUNT ((int)(sizeof(CITY_SIGNALS) / sizeof(CITY_SIGNALS[0])))
+#define CITY_STOP_COUNT ((int)(sizeof(CITY_STOP_SIGNS) / sizeof(CITY_STOP_SIGNS[0])))
+
+static int city_signal_phase(int index) {
+    float phase = fmodf(game_time + CITY_SIGNALS[index].phase_offset, 18.0f);
+    if (phase < 8.0f) return 0;
+    if (phase < 10.0f) return 2;
+    if (phase < 16.0f) return 1;
+    return 2;
+}
+
+static int city_signal_green(int index, float yaw) {
+    int phase = city_signal_phase(index);
+    int horizontal = fabsf(sinf(yaw)) > fabsf(cosf(yaw));
+    return phase != 2 && horizontal == (phase == 0);
+}
+
+static int traffic_approaching(float x, float z, const Vehicle *v,
+                               float max_ahead, float max_lateral) {
+    float dx = x - v->pos.x, dz = z - v->pos.z;
+    float fx = sinf(v->yaw), fz = cosf(v->yaw);
+    float ahead = dx * fx + dz * fz;
+    float lateral = fabsf(dx * fz - dz * fx);
+    return ahead > 0.0f && ahead < max_ahead && lateral < max_lateral;
+}
+
+static int city_route_highway(const Vehicle *v) {
+    if (v->route_id <= 0) return 0;
+    const Route *route = &routes[v->route_id - 1];
+    if (!route->loop || route->n < 2) return 0;
+    int target = v->wp % route->n;
+    int previous = (target + route->n - 1) % route->n;
+    const Vector3D *from = &route->p[previous], *to = &route->p[target];
+    return fabsf(from->z - to->z) < 1.0f &&
+           (fabsf(from->z - 512.0f) < 1.0f || fabsf(from->z - 1088.0f) < 1.0f);
+}
+
+static void apply_city_traffic_controls(Vehicle *v, VehInput *in, float dt) {
+    if (v->traffic_stop_cooldown > 0.0f) v->traffic_stop_cooldown -= dt;
+    if (v->traffic_stop_timer > 0.0f) {
+        v->traffic_stop_timer -= dt;
+        in->accel = 0.0f; in->brake = v->speed > 0.5f ? 1.0f : 0.0f;
+        return;
+    }
+    for (int i = 0; i < CITY_SIGNAL_COUNT; i++) {
+        if (traffic_approaching(CITY_SIGNALS[i].x, CITY_SIGNALS[i].z, v, 24.0f, 5.0f) &&
+            !city_signal_green(i, v->yaw)) {
+            in->accel = 0.0f; in->brake = v->speed > 0.5f ? 1.0f : 0.0f;
+            return;
+        }
+    }
+    if (v->traffic_stop_cooldown <= 0.0f) for (int i = 0; i < CITY_STOP_COUNT; i++) {
+        if (!traffic_approaching(CITY_STOP_SIGNS[i].x, CITY_STOP_SIGNS[i].z, v, 12.0f, 2.5f)) continue;
+        in->accel = 0.0f;
+        if (v->speed > 0.65f) in->brake = 1.0f;
+        else {
+            v->traffic_stop_timer = 1.0f;
+            v->traffic_stop_cooldown = 12.0f;
+        }
+        return;
+    }
+}
+
 static void route_ai(Vehicle *v, VehInput *in) {
     if (v->route_id <= 0) return;
     const Route *r = &routes[v->route_id - 1];
@@ -1095,7 +1170,8 @@ static void route_ai(Vehicle *v, VehInput *in) {
         diff = point_blocked(v->pos.x + sinf(ly)*ahead, v->pos.z + cosf(ly)*ahead) ? -0.9f : 0.9f;
     }
     in->steer = clampf(-diff * 2.2f, -1.0f, 1.0f);
-    float want = v->cruise; if (fabsf(diff) > 0.7f) want *= 0.5f;
+    float want = v->cruise + (v->ai == AI_TRAFFIC && city_route_highway(v) ? 2.5f : 0.0f);
+    if (fabsf(diff) > 0.7f) want *= 0.5f;
     if (v->speed < want) in->accel = 0.8f; else if (v->speed > want + 3.0f) in->brake = 1.0f;
 }
 
@@ -1117,6 +1193,7 @@ static int npc_ahead_of_traffic(const Vehicle *v) {
 static void update_vehicles(float dt, float lx, float ly, uint32_t b, uint32_t pressed, float ext_l, float ext_r) {
     for (int i = 0; i < MAX_VEHICLES; i++) {
         Vehicle *v = &vehicles[i]; if (!v->active) continue;
+        Vector3D previous_safe_position = v->pos;
         const VehSpec *s = &VSPEC[v->type];
         VehInput in; memset(&in, 0, sizeof(in));
         if (i == player.veh) {
@@ -1126,9 +1203,9 @@ static void update_vehicles(float dt, float lx, float ly, uint32_t b, uint32_t p
         } else if (v->ai == AI_CHASE || v->ai == AI_TACTICAL) police_ai(v, &in);
         else if (v->ai == AI_ROUTE || v->ai == AI_TRAFFIC) {
             route_ai(v, &in);
+            if (v->ai == AI_TRAFFIC) apply_city_traffic_controls(v, &in, dt);
             if (v->ai == AI_TRAFFIC && npc_ahead_of_traffic(v)) {
-                in.accel = 0.0f;
-                in.brake = 1.0f;
+                in.accel = 0.0f; in.brake = v->speed > 0.5f ? 1.0f : 0.0f;
             }
         }
 
@@ -1147,7 +1224,10 @@ static void update_vehicles(float dt, float lx, float ly, uint32_t b, uint32_t p
         if (collide_world(&v->pos, s->hl * 0.7f)) {
             if (s->cls == CLS_AIR) v->health -= 100.0f;
             else { if (hitspeed > 8.0f) { v->health -= hitspeed * 1.2f; if (v->occupied) player.health -= (int)(hitspeed * 0.25f); }
-                   v->vx *= 0.25f; v->vz *= 0.25f; }
+                   VehicleSystemVector3 current_pos = { v->pos.x, v->pos.y, v->pos.z };
+                   VehicleSystemVector3 safe_pos = { previous_safe_position.x, previous_safe_position.y, previous_safe_position.z };
+                   VehicleSystem_RestoreAndBounce(&current_pos, safe_pos, &v->speed, &v->vx, &v->vz, 0.3f);
+                   v->pos.x = current_pos.x; v->pos.y = current_pos.y; v->pos.z = current_pos.z; }
         }
         if (v->flipped_now) { v->flipped_now = 0; if (i == player.veh) eject_player(25.0f); }
         if (v->health <= 0.0f) {                                            /* wrecked */
@@ -1187,8 +1267,61 @@ static int vehicle_approaching_npc(const NPC *n, float *vehicle_yaw) {
 }
 
 static void npc_choose_wander_target(NPC *n) {
-    n->target_x = clampf(n->pos.x + (rndf() * 20.0f - 10.0f), CITY_CX - CITY_HX + 24.0f, CITY_CX + CITY_HX - 24.0f);
-    n->target_z = clampf(n->pos.z + (rndf() * 20.0f - 10.0f), CITY_CZ - CITY_HZ + 24.0f, CITY_CZ + CITY_HZ - 24.0f);
+    for (int attempt = 0; attempt < 8; attempt++) {
+        float x = clampf(n->pos.x + (rndf() * 120.0f - 60.0f), CITY_CX - CITY_HX + 24.0f, CITY_CX + CITY_HX - 24.0f);
+        float z = clampf(n->pos.z + (rndf() * 120.0f - 60.0f), CITY_CZ - CITY_HZ + 24.0f, CITY_CZ + CITY_HZ - 24.0f);
+        if (!point_blocked(x, z)) { n->target_x = x; n->target_z = z; return; }
+    }
+    n->target_x = n->pos.x; n->target_z = n->pos.z;
+}
+
+static void spawn_city_pedestrians(void) {
+    int made = 0, circles = 0, attempts = 0;
+    while (made < 14 && attempts++ < MAX_NPCS * 32) {
+        int slot = -1;
+        for (int i = 0; i < MAX_NPCS; i++) if (!npcs[i].active) { slot = i; break; }
+        if (slot < 0) return;
+        float x = player.pos.x + rndf() * 260.0f - 130.0f;
+        float z = player.pos.z + rndf() * 260.0f - 130.0f;
+        if (!in_city(x, z, 24.0f) || point_blocked(x, z)) continue;
+        int occupied = 0;
+        for (int i = 0; i < MAX_VEHICLES; i++) if (vehicles[i].active) {
+            float dx = x - vehicles[i].pos.x, dz = z - vehicles[i].pos.z;
+            if (dx * dx + dz * dz < 64.0f) { occupied = 1; break; }
+        }
+        if (occupied) continue;
+
+        NPC *n = &npcs[slot];
+        memset(n, 0, sizeof(*n));
+        n->active = 1; n->health = 50; n->state = NPC_WANDER;
+        n->behavior = circles < 6 ? 1 : 0;
+        n->color = RGB(75 + rnd() % 155, 75 + rnd() % 155, 75 + rnd() % 155);
+        n->pos.y = terrain_height(x, z);
+        if (n->behavior) {
+            n->orbit_x = x; n->orbit_z = z;
+            n->orbit_radius = 5.0f + rndf() * 5.0f;
+            n->orbit_angle = rndf() * 2.0f * PI_F;
+            int clear = 1;
+            for (int sample = 0; sample < 8; sample++) {
+                float angle = n->orbit_angle + sample * (PI_F * 0.25f);
+                float px = x + sinf(angle) * n->orbit_radius;
+                float pz = z + cosf(angle) * n->orbit_radius;
+                if (point_blocked(px, pz)) { clear = 0; break; }
+            }
+            if (clear) {
+                n->pos.x = x + sinf(n->orbit_angle) * n->orbit_radius;
+                n->pos.z = z + cosf(n->orbit_angle) * n->orbit_radius;
+                n->yaw = n->orbit_angle + PI_F * 0.5f;
+                circles++;
+            } else n->behavior = 0;
+        }
+        if (!n->behavior) {
+            n->pos.x = x; n->pos.z = z;
+            n->yaw = rndf() * 2.0f * PI_F;
+            npc_choose_wander_target(n);
+        }
+        made++;
+    }
 }
 
 static void update_npcs(float dt) {
@@ -1212,10 +1345,15 @@ static void update_npcs(float dt) {
         if (n->type == 0 && d < 15.0f) n->state = NPC_PANIC;
         else if (n->type == 0 && fire_alert > 0.0f && d < 60.0f) n->state = NPC_FLEE;
         else if (n->type == 0 && pspd > 15.0f && d < 25.0f) n->state = NPC_PANIC;
+        else if ((n->state == NPC_PANIC || n->state == NPC_FLEE) && d > 30.0f && fire_alert <= 0.0f) n->state = NPC_WANDER;
         float sp = (n->type == 1) ? 0.0f : (n->type == 2) ? 0.9f : 1.4f;
         if (n->state == NPC_FLEE || n->state == NPC_PANIC) {
             n->yaw = (d > 0.001f) ? atan2f(-dx, -dz) : n->yaw + PI_F;
             sp = 5.0f;
+        }
+        else if (n->behavior == 1) {
+            n->orbit_angle += (sp / n->orbit_radius) * dt;
+            n->yaw = n->orbit_angle + PI_F * 0.5f;
         }
         else {
             float car_yaw;
@@ -1359,6 +1497,7 @@ static void update_race(float dt) {
 static void camera_follow(float dt, float lx, float ly, int lheld) {
     static const float FD[3] = {4.5f, 7.0f, 11.0f}, FH[3] = {2.0f, 3.0f, 5.0f};
     static const float VD[3] = {9.0f, 14.0f, 22.0f}, VH[3] = {3.5f, 5.0f, 8.0f};
+    Vector3D previous_eye = cam_eye, previous_ctr = cam_ctr;
     float tyaw = player.yaw, dist, h, tx, tz; Vector3D tp = player.pos;
     const VehSpec *s = NULL; const Vehicle *v = NULL; int bumper = 0;
 
@@ -1411,6 +1550,18 @@ static void camera_follow(float dt, float lx, float ly, int lheld) {
         cam_ctr.x = tp.x; cam_ctr.y = tp.y + 1.5f; cam_ctr.z = tp.z;
     }
     float g = terrain_height(cam_eye.x, cam_eye.z) + 1.0f; if (cam_eye.y < g) cam_eye.y = g;
+    if (camera_initialized) {
+        VehicleSystemVector3 eye_from = { previous_eye.x, previous_eye.y, previous_eye.z };
+        VehicleSystemVector3 eye_to = { cam_eye.x, cam_eye.y, cam_eye.z };
+        VehicleSystemVector3 ctr_from = { previous_ctr.x, previous_ctr.y, previous_ctr.z };
+        VehicleSystemVector3 ctr_to = { cam_ctr.x, cam_ctr.y, cam_ctr.z };
+        eye_from = VehicleSystem_LerpVector(eye_from, eye_to, dt, 7.0f);
+        ctr_from = VehicleSystem_LerpVector(ctr_from, ctr_to, dt, 9.0f);
+        cam_eye.x = eye_from.x; cam_eye.y = eye_from.y; cam_eye.z = eye_from.z;
+        cam_ctr.x = ctr_from.x; cam_ctr.y = ctr_from.y; cam_ctr.z = ctr_from.z;
+        g = terrain_height(cam_eye.x, cam_eye.z) + 1.0f; if (cam_eye.y < g) cam_eye.y = g;
+    }
+    camera_initialized = 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1546,15 +1697,16 @@ static void spawn_city_traffic(void) {
         {-1280.0f, 0.0f, 1088.0f}, {-1280.0f, 0.0f, 896.0f}
     };
     static const int types[4] = { VEH_LC100, VEH_Y60, VEH_Y61, VEH_Y62 };
-    for (int car = 0; car < 4; car++) {
+    for (int car = 0; car < 6; car++) {
         Vector3 path[ROUTE_PTS];
-        int start = car * 2;
+        int start = (car * ROUTE_PTS) / 6;
         for (int j = 0; j < ROUTE_PTS; j++) path[j] = loop[(start + j) % ROUTE_PTS];
         float dx = path[1].x - path[0].x, dz = path[1].z - path[0].z;
-        int i = spawn_vehicle(types[car], path[0].x, path[0].z, atan2f(dx, dz), AI_TRAFFIC);
+        int i = spawn_vehicle(types[rnd() % 4], path[0].x, path[0].z, atan2f(dx, dz), AI_TRAFFIC);
         if (i < 0) continue;
         if (SetVehicleRoute(ENT_VEH_BASE + i, path, ROUTE_PTS, 8.0f)) {
             vehicles[i].ai = AI_TRAFFIC;
+            vehicles[i].cruise = 5.5f + rndf() * 1.5f;
             routes[vehicles[i].route_id - 1].loop = 1;
         } else {
             vehicles[i].ai = AI_NONE;
@@ -2158,8 +2310,8 @@ static void Missions_Tick(float dt) {
 /*  Reset / init                                                             */
 /* ------------------------------------------------------------------------ */
 static void controls_defaults(void) {
-    ctl.accelerate = PSP_CTRL_CROSS; ctl.brake = PSP_CTRL_CIRCLE;
-    ctl.handbrake = PSP_CTRL_SQUARE; ctl.interact = PSP_CTRL_TRIANGLE;
+    ctl.accelerate = PSP_CTRL_CROSS; ctl.brake = PSP_CTRL_SQUARE;
+    ctl.handbrake = PSP_CTRL_CIRCLE; ctl.interact = PSP_CTRL_TRIANGLE;
 }
 static void reset_world(int story) {
     memset(vehicles, 0, sizeof(vehicles)); memset(npcs, 0, sizeof(npcs));
@@ -2195,8 +2347,10 @@ static void reset_world(int story) {
     for (int i = 0; i < MAX_VEHICLES; i++) if (vehicles[i].active) vehicles[i].owned = 0;
     mission_reset();
     spawn_city_traffic();
-    set_status("Liwa Dunes: desert open map");
+    spawn_city_pedestrians();
+    set_status(selected_map == 1 ? "Liwa City: urban traffic district" : selected_map == 2 ? "Airport district" : "Liwa Dunes: desert open map");
     cam_yaw = player.yaw; status_timer = 0;
+    camera_initialized = 0;
     look_yaw = look_pitch = aim_pitch = 0.0f; fp_mode = lock_active = cam_snap = 0; lock_idx = -1;
 }
 static void enter_gameplay(int story) { story_mode = story; reset_world(story); if (story) load_game(); current_state = STATE_GAMEPLAY; }
@@ -2529,6 +2683,46 @@ static void draw_world(const Vector3D *eye, const Vector3D *ctr) {
     sceGumMatrixMode(GU_VIEW); sceGumLoadIdentity(); sceGumLookAt(&e, &c, &up);
     draw_terrain(eye->x, eye->z);
     model_identity();
+
+    if (visible(CITY_CX, CITY_CZ, eye->x, eye->z, 720.0f)) {
+        const uint32_t asphalt = RGB(43,46,50), lane = RGB(205,190,130);
+        draw_box(-992.0f, 0.04f, 512.0f, 592.0f, 0.08f, 22.0f, asphalt);
+        draw_box(-992.0f, 0.04f, 1088.0f, 592.0f, 0.08f, 22.0f, asphalt);
+        draw_box(-1280.0f, 0.04f, 800.0f, 22.0f, 0.08f, 592.0f, asphalt);
+        draw_box(-704.0f, 0.04f, 800.0f, 22.0f, 0.08f, 592.0f, asphalt);
+        for (int dash = 0; dash < 8; dash++) {
+            float x = -1248.0f + dash * 72.0f;
+            float z = 544.0f + dash * 72.0f;
+            draw_box(x, 0.10f, 512.0f, 18.0f, 0.04f, 0.35f, lane);
+            draw_box(x, 0.10f, 1088.0f, 18.0f, 0.04f, 0.35f, lane);
+            draw_box(-1280.0f, 0.10f, z, 0.35f, 0.04f, 18.0f, lane);
+            draw_box(-704.0f, 0.10f, z, 0.35f, 0.04f, 18.0f, lane);
+        }
+        for (int signal = 0; signal < CITY_SIGNAL_COUNT; signal++) {
+            if (!visible(CITY_SIGNALS[signal].x, CITY_SIGNALS[signal].z, eye->x, eye->z, 420.0f)) continue;
+            int phase = city_signal_phase(signal);
+            int horiz_green = phase == 0, vert_green = phase == 1, amber = phase == 2;
+            float sx = CITY_SIGNALS[signal].x + 9.0f, sz = CITY_SIGNALS[signal].z;
+            draw_box(sx, 2.6f, sz, 0.35f, 5.2f, 0.35f, RGB(55,58,60));
+            for (int axis = 0; axis < 2; axis++) {
+                int green = axis == 0 ? horiz_green : vert_green;
+                int red = axis == 0 ? vert_green : horiz_green;
+                float hx = sx + (axis == 0 ? -0.75f : 0.75f);
+                draw_box(hx, 5.0f, sz, 0.82f, 1.9f, 0.7f, RGB(24,26,28));
+                draw_box(hx, 5.55f, sz + 0.38f, 0.38f, 0.38f, 0.10f, red ? RGB(240,35,30) : RGB(95,30,25));
+                draw_box(hx, 5.00f, sz + 0.38f, 0.38f, 0.38f, 0.10f, amber ? RGB(255,175,35) : RGB(85,65,25));
+                draw_box(hx, 4.45f, sz + 0.38f, 0.38f, 0.38f, 0.10f, green ? RGB(35,235,70) : RGB(30,90,40));
+            }
+        }
+        for (int sign = 0; sign < CITY_STOP_COUNT; sign++) {
+            if (!visible(CITY_STOP_SIGNS[sign].x, CITY_STOP_SIGNS[sign].z, eye->x, eye->z, 420.0f)) continue;
+            float sx = CITY_STOP_SIGNS[sign].x + (sign == 0 ? 8.0f : -8.0f);
+            float sz = CITY_STOP_SIGNS[sign].z;
+            draw_box(sx, 1.8f, sz, 0.18f, 3.6f, 0.18f, RGB(95,95,92));
+            draw_box(sx, 3.3f, sz, 1.25f, 1.25f, 0.2f, RGB(245,245,235));
+            draw_box(sx, 3.3f, sz + 0.12f, 0.95f, 0.95f, 0.08f, RGB(205,38,30));
+        }
+    }
 
     /* runway + stripes */
     draw_box(1000, 0.15f, -1000, 600, 0.3f, 30, RGB(45,45,50));
@@ -2892,12 +3086,14 @@ int main(void) {
     sceCtrlSetSamplingCycle(0); sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     controls_defaults(); reset_world(0);
 
-    SceCtrlData pad; uint32_t old = 0;
+    SceCtrlData pad;
+    VehicleSystem_ResetInput();
     uint64_t last = sceKernelGetSystemTimeWide();
+    unsigned int frame_counter = 0;
 
     while (running) {
-        sceCtrlPeekBufferPositive(&pad, 1);
-        uint32_t pressed = pad.Buttons & ~old; g_released = old & ~pad.Buttons; old = pad.Buttons;
+        uint32_t pressed;
+        VehicleSystem_PollInput(&pad, &pressed, &g_released);
         uint64_t now = sceKernelGetSystemTimeWide();
         float dt = clampf((float)(now - last) / 1000000.0f, 0.004f, 0.05f); last = now;
         if (current_state != STATE_GAMEPLAY) game_time += dt;
@@ -2923,14 +3119,18 @@ int main(void) {
         case STATE_CONTROLS_CONFIG: update_controls(pressed); break;
         }
 
-        render_frame();
-        if (current_state == STATE_PHOTO_MODE && capture_req) {           /* clean frame, no HUD */
-            capture_req = 0; set_status(save_screenshot() ? "Photo saved to " PHOTO_DIR : "Could not write photo");
+        if ((frame_counter++ & 1u) == 0u) {
+            render_frame();
+            if (current_state == STATE_PHOTO_MODE && capture_req) {       /* clean frame, no HUD */
+                capture_req = 0; set_status(save_screenshot() ? "Photo saved to " PHOTO_DIR : "Could not write photo");
+            }
+            if (!(current_state == STATE_PHOTO_MODE && photo_hide_ui && status_timer <= 0.0f)) draw_hud();
+            sceDisplayWaitVblankStart();
+            sceGuSwapBuffers();
+            draw_off = (draw_off == 0) ? FRAME_SIZE : 0;
+        } else {
+            sceDisplayWaitVblankStart();
         }
-        if (!(current_state == STATE_PHOTO_MODE && photo_hide_ui && status_timer <= 0.0f)) draw_hud();
-        sceDisplayWaitVblankStart();
-        sceGuSwapBuffers();
-        draw_off = (draw_off == 0) ? FRAME_SIZE : 0;
     }
     sceKernelExitGame();
     return 0;

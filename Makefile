@@ -1,8 +1,8 @@
 TARGET = LiwaSandbox
-OBJS   = main.o
+OBJS   = main.o VehicleSystem.o
 
 CFLAGS   = -O2 -G0 -Wall -std=gnu99
-CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
+CXXFLAGS = -O2 -G0 -Wall -std=gnu++11 -fno-exceptions -fno-rtti
 ASFLAGS  = $(CFLAGS)
 
 LIBDIR =
