@@ -78,7 +78,7 @@ Mission progress and cash are saved in Story Mode. Some specified vehicles and i
 
 
 
-*need to add later
+## need to add later
 Grand Theft Auto: Liberty City Stories (LCS) running seamlessly on the PSP in 2005 is widely considered one of the greatest technical achievements in handheld gaming history.
 To shrink a massive, open-world 3D console game down to a portable device with a 333MHz CPU and a strict 32MB of RAM, Rockstar Leeds and Rockstar North had to ditch the standard RenderWare engine used for GTA III, Vice City, and San Andreas. Instead, they built a brand-new custom engine explicitly designed to exploit the PSP's unique hardware strengths.
 Here is exactly how they pulled it off:
