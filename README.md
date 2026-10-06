@@ -1,9 +1,3 @@
-# fake-gta-clone-in-the-desert
-
-i want to create a gta clone set in the uae in the deserts of liwa but be able to play this on a psp so im using an ai to help me but if you want to help me just message me on instagram on twitter my username on both is 
-
-@S1RB4T
-
 # Liwa Sandbox - build notes
 
 Files: `main.c` (whole game), `Makefile`.
@@ -30,11 +24,34 @@ Files: `main.c` (whole game), `Makefile`.
 
 ## Controls (defaults, remappable in the menu)
 - Nub: move / steer.  X sprint / accelerate.  O fire / brake.  [] jump / handbrake.  /\ enter-exit / shop.
-- L hold: free look (tap: recenter).  R hold: lock-on (sniper: first-person aim).  D-pad L/R: weapon, lock target, plane rudder.
+- L hold: free look (tap: recenter).  R hold: lock-on (sniper: first-person aim).  D-pad L/R: weapon, lock target, plane rudder.  D-pad Down: honk while driving.
 - SELECT: camera distance.  START: photo mode (X shoot, START exit).
 - In a car: L + nub left/right looks out the windows, L + O drive-by.
 - Planes: nub = roll/pitch, X/O throttle up/down, D-pad L/R rudder.
+- On foot, Triangle enters a nearby vehicle; while driving, stop and press Triangle to exit. Pedestrians use the placeholder character and yield to approaching traffic. The city has visible gun shops, a hospital, and a police department; being wasted or busted shows a full-screen message before respawning at the nearest matching service.
+- The open world starts at 08:00 and advances at one game minute per real second. Weather periodically shifts between clear, cloudy, sandstorm, and rain; it changes sky/fog presentation, and rain reduces vehicle grip. Up to 24 ambient/mission pedestrians share a fixed pool: ambient pedestrians choose destinations, flee gunfire or nearby fast vehicles, and are despawned when they are more than 340 m away. New city pedestrians appear outside the near-camera range. The wanted system supports up to six stars.
 
-## Missions (placeholders)
-Walk onto a yellow beacon on foot with no wanted level. Three starter missions: Tail the Cruiser,
-Paparazzi, Respray Job. Replace them with your own in the "PLACEHOLDER MISSIONS" block of `main.c`.
+## Story missions
+Walk onto a yellow mission beacon on foot with no wanted level to start. The ten missions use the
+existing vehicle/NPC pools and mission state machine:
+
+1. **Sands of Arrival** - board the border SUV, visit the safehouse, then reach the compound.
+2. **Desert Courier** - honk near the runner at the oasis and deliver them to the date farm.
+3. **Dune Retaliation** - clear the camp using unarmed melee, then return to the safehouse
+   to unlock a stronger melee attack.
+4. **Ambush at the Oasis** - clear the construction site, take the buggy, respray it, and park it.
+5. **Sandstorm Rescue** - obtain a car, collect the crew before the 180-second timer expires,
+   lose the wanted level, and deliver them.
+6. **The Trapped Buggy** - escape the police and take the buggy to the scrap-yard crusher.
+7. **Oasis Shake Down** - wear the Tan outfit, board the van, and honk at seven vendors before
+   the 300-second timer expires; eliminate rival waves when they attack.
+8. **Escaping the Dunes** - board the Armored SUV, evade police, and reach the estate to unlock
+   the existing assault-rifle slot as the Micro-SMG stand-in.
+9. **Eye in the Dunes** - collect the camera, tail the merchant truck, take two photos, and return.
+10. **Clash at the Oasis** - clear the foot patrols and both armed trucks.
+
+Mission progress and cash are saved in Story Mode. Some specified vehicles and interactive
+locations are represented by the game's existing vehicle types and world coordinates; passenger
+pickups, weapon unlocks, and the crusher are mission-state events rather than separate interior
+systems. Radio playback is not included yet: this project has no audio-streaming manager or bundled
+music assets, so the radio/audio stubs from the sample have not been exposed as nonfunctional controls.
