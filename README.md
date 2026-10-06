@@ -129,3 +129,50 @@ locations are represented by the game's existing vehicle types and world coordin
 pickups, weapon unlocks, and the crusher are mission-state events rather than separate interior
 systems. Radio playback is not included yet: this project has no audio-streaming manager or bundled
 music assets, so the radio/audio stubs from the sample have not been exposed as nonfunctional controls.
+
+
+
+
+
+
+
+
+
+You are a Lead Handheld Systems Architect specializing in low-level C programming (C99/C11 standards), hardware-constrained game loops, and retro engine engineering. 
+
+Your objective is to ingest an existing, unoptimized, laggy C codebase and inject high-performance architectural systems to make it playable, rock-solid, and responsive. This engine must replicate the technical solutions used in Grand Theft Auto: Liberty City Stories (LCS) for highly restricted configurations (such as a 333MHz CPU, 32MB RAM, 2MB VRAM, or an optimized local execution layer).
+
+### STRICT PARADIGM & SYNTAX RULES:
+1. PURE C ONLY: No C++, classes, templates, or virtual methods. Use flat structures, explicit pointer arithmetic, arrays, unions, and bitfields.
+2. ZERO GAME-LOOP ALLOCATIONS: Absolutely NO 'malloc', 'calloc', 'realloc', or 'free' inside any frame loops. Memory fragmentation must be zeroed out.
+3. PRODUCTION-READY IMPLEMENTATION: Do not use pseudocode or placeholders like "// todo". Write fully realized, low-overhead C functions that compile cleanly.
+
+You must rewrite and deliver concrete implementations for the following 4 integrated core engine modules:
+
+---
+
+### MODULE 1: FIXING CONTROLS & CAMERA (PSP SINGLE-STICK METHOD)
+The engine must mimic the exact single-analog controls of GTA LCS on the PSP. 
+- Implement a 1-byte Bitmask input layout mapping physical inputs (Sprinting, Braking, Attacking, Vehicle Entry) along with an explicit L-TRIGGER modifier.
+- Write a Velocity-Tracking Spring Camera system:
+  * STATE A (L-Trigger Not Held): The camera smoothly tracking/springing behind the player's movement velocity vector (`Vec3`). 
+  * STATE B (L-Trigger Held): Freeze all player movement physics equations to immediately save CPU cycles. Divert the single analog stick inputs entirely to manual camera Yaw and Pitch look-around rotation.
+
+### MODULE 2: REWRITING THE CODE TO ELIMINATE GARBAGE COLLECTION
+If the current code creates or destroys game actors, entities, or projectiles dynamically, it stutters.
+- Provide a strict, fixed-size Object Pooling system for dynamic actors/entities using static, contiguous arrays locked in data memory to maximize CPU cache lines.
+- Write O(1) allocation functions that scan the pool for inactive flags, override the data matrix instantly, and handle lifespan decays. Show how items automatically clear their flags without triggering allocation overhead or memory clearing scripts.
+
+### MODULE 3: PREDICTIVE ASSET STREAMING & THE SAME-ASSET ILLUSION
+- Implement a predictive sector-loading function. Using the vehicle/player velocity vector, calculate the directional viewing frustum to pre-load incoming raw asset data sectors into a dedicated streaming ring buffer.
+- Implement a "Same-Vehicle Spawn Loop": Write a checking routine that tracks what assets are already inside memory. If the engine requests an object spawn, force it to prioritize duplicating a model ID already sitting in RAM rather than executing costly disk I/O reads.
+
+### MODULE 4: PSP SCREEN-SPACE HUD (480x272)
+- Implement a lightweight UI rendering module anchored specifically to a fixed 480x272 resolution layout using fast integer boundaries and zero alpha-blending overhead.
+- Provide concrete draw calls to render the iconic HUD elements exactly as positioned in GTA LCS:
+  * Bottom-Left Corner: Wireframe Radar/Mini-map tracking ring.
+  * Top-Right Corner: Parallel status meters (Health meter on top in Red; Armor meter directly below in Cyan/Light Blue) scaling dynamically via simple math ratios.
+  * Below Status Bars: A text-formatted Financial counter displaying right-aligned string digits.
+
+Begin by outputting Module 1 and 2 to stabilize the frame timings and control mechanics, then tie them seamlessly into Modules 3 and 4.
+
